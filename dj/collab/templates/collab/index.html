@@ -2,28 +2,378 @@
 <html lang="en">
 <head>
 <title>ACE in Action</title>
-<style type="text/css" media="screen">
-    #editor { 
+  <style type="text/css" media="screen">
+    #ace-editor { 
         position: absolute;
         top: 0;
         right: 0;
         bottom: 0;
         left: 0;
     }
-</style>
+  </style>
+  <link rel="stylesheet" type="text/css" href="/static/collab/npm/node_modules/@convergencelabs/ace-collab-ext/css/ace-collab-ext.min.css">
+  <script src="/static/collab/convergence/rxjs.umd.min.js"></script>
+  <script src="/static/collab/convergence/convergence.global.min.js"></script>
+  <script src="/static/collab/convergence/convergence-input-element-bindings.min.js"></script>
+  <script src="/static/collab/ace/ace.js" type="text/javascript" charset="utf-8"></script>
+  <script src="/static/collab/npm/node_modules/@convergencelabs/ace-collab-ext/umd/ace-collab-ext.js" type="text/javascript" charset="utf-8"></script>
+  <script src="/static/collab/npm/node_modules/@convergence/color-assigner/umd/color-assigner.js" type="text/javascript" charset="utf-8"></script>
 </head>
 <body>
 
-<div id="editor">function foo(items) {
-    var x = "All this is syntax highlighted";
-    return x;
-}</div>
-    
-<script src="/static/collab/ace/ace.js" type="text/javascript" charset="utf-8"></script>
+
+<div class="wrapped-editor">
+  <div class="editor" id="ace-editor"></div>
+  <div class="radar-view" id="radar-view"></div>
+</div>
+
+
 <script>
-    var editor = ace.edit("editor");
-    editor.setTheme("ace/theme/monokai");
-    editor.session.setMode("ace/mode/javascript");
+
+var DOMAIN_URL = "http://localhost:8001/api/realtime/convergence/default";
+
+
+// var editor = ace.edit("editor");
+// editor.setTheme("ace/theme/monokai");
+// editor.session.setMode("ace/mode/javascript");
+
+
+/*
+// 1. Connect to the domain anonymously.
+Convergence.connectAnonymously(DOMAIN_URL)
+  .then(initApp)
+  .catch((error) => {
+    console.log("Could not connect: " + error);
+  });
+
+// 2. Initializes the application after connecting by opening a model.
+function initApp(domain) {
+  const modelService = domain.models();
+  modelService.openAutoCreate({
+    collection: "example",
+    id: "getting-started",
+    data: { text: "Hello World" }
+  })
+  .then(initModel)
+  .catch((error) => {
+    console.log("Could not open model: " + error);
+  });
+}
+*/
+/*
+// 3. Initializes the model once the model is open.
+function initModel(model) {
+  const stringModel = model.elementAt("text");
+  const textArea = document.getElementById("textarea");
+
+  // Sets the value of the text area and performs a two-way-binding.
+  ConvergenceInputElementBinder.bindTextInput(textArea, stringModel);
+}
+*/
+
+// Connect to the domain.  See ../config.js for the connection settings.
+
+const username = 'daniel';
+const convergenceExampleId = "getting-started";
+const defaultEditorContents = "Hello World";
+
+
+let editor = null;
+let session = null;
+let doc = null;
+
+editor = ace.edit("ace-editor");
+editor.setTheme('ace/theme/monokai');
+
+session = editor.getSession();
+session.setMode('ace/mode/javascript');
+
+
+const AceRange = ace.require("ace/range").Range;
+const colorAssigner = new ConvergenceColorAssigner.ColorAssigner();
+
+
+Convergence.connectAnonymously(DOMAIN_URL, username)
+  .then(d => {
+    domain = d;
+    // Now open the model, creating it using the initial data if it does not exist.
+    return domain.models().openAutoCreate({
+      collection: "example-ace",
+      id: convergenceExampleId,
+      ephemeral: true,
+      data: {text: defaultEditorContents}
+    })
+  })
+  .then(handleOpen)
+  .catch(error => {
+    console.error("Could not open model ", error);
+  });
+
+
+function handleOpen(model) {
+  // editor = ace.edit("ace-editor");
+  // editor.setTheme('ace/theme/monokai');
+
+  // session = editor.getSession();
+  // session.setMode('ace/mode/javascript');
+
+  doc = session.getDocument();
+  const textModel = model.elementAt("text");
+
+  initModel(textModel);
+  initSharedCursors(textModel);
+  initSharedSelection(textModel);
+
+  const radarViewElement = document.getElementById("radar-view");
+  initRadarView(textModel, radarViewElement);
+
+  //exampleLoaded();
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Text Binding
+/////////////////////////////////////////////////////////////////////////////
+let suppressEvents = false;
+
+function initModel(textModel) {
+  const session = editor.getSession();
+  session.setValue(textModel.value());
+
+  textModel.on("insert", (e) => {
+    const pos = doc.indexToPosition(e.index);
+    suppressEvents = true;
+    doc.insert(pos, e.value);
+    suppressEvents = false;
+  });
+
+  textModel.on("remove", (e) => {
+    const start = doc.indexToPosition(e.index);
+    const end = doc.indexToPosition(e.index + e.value.length);
+    suppressEvents = true;
+    doc.remove(new AceRange(start.row, start.column, end.row, end.column));
+    suppressEvents = false;
+  });
+
+  textModel.on("value", function (e) {
+    suppressEvents = true;
+    doc.setValue(e.value);
+    suppressEvents = false;
+  });
+
+  editor.on('change', (delta) => {
+    if (suppressEvents) {
+      return;
+    }
+
+    const pos = doc.positionToIndex(delta.start);
+    switch (delta.action) {
+      case "insert":
+        textModel.insert(pos, delta.lines.join("\n"));
+        break;
+      case "remove":
+        textModel.remove(pos, delta.lines.join("\n").length);
+        break;
+      default:
+        throw new Error("unknown action: " + delta.action);
+    }
+  });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Cursor Binding
+/////////////////////////////////////////////////////////////////////////////
+const cursorKey = "cursor";
+let cursorReference = null;
+let cursorManager = null;
+
+function initSharedCursors(textElement) {
+  cursorManager = new AceCollabExt.AceMultiCursorManager(editor.getSession());
+  cursorReference = textElement.indexReference(cursorKey);
+
+  const references = textElement.references({key: cursorKey});
+  references.forEach((reference) => {
+    if (!reference.isLocal()) {
+      addCursor(reference);
+    }
+  });
+
+  setLocalCursor();
+  cursorReference.share();
+
+  editor.getSession().selection.on('changeCursor', () => setLocalCursor());
+
+  textElement.on("reference", (e) => {
+    if (e.reference.key() === cursorKey) {
+      this.addCursor(e.reference);
+    }
+  });
+}
+
+function setLocalCursor() {
+  const position = editor.getCursorPosition();
+  const index = doc.positionToIndex(position);
+  cursorReference.set(index);
+}
+
+function addCursor(reference) {
+  const color = colorAssigner.getColorAsHex(reference.sessionId());
+  const remoteCursorIndex = reference.value();
+  cursorManager.addCursor(reference.sessionId(), reference.user().displayName, color, remoteCursorIndex);
+
+  reference.on("cleared", () => cursorManager.clearCursor(reference.sessionId()));
+  reference.on("disposed", () => cursorManager.removeCursor(reference.sessionId()));
+  reference.on("set", () => {
+    const cursorIndex = reference.value();
+    const cursorRow = doc.indexToPosition(cursorIndex).row;
+    cursorManager.setCursor(reference.sessionId(), cursorIndex);
+
+    if (radarView.hasView(reference.sessionId())) {
+      radarView.setCursorRow(reference.sessionId(), cursorRow);
+    }
+  });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Selection Binding
+/////////////////////////////////////////////////////////////////////////////
+let selectionManager = null;
+let selectionReference = null;
+const selectionKey = "selection";
+
+function initSharedSelection(textModel) {
+  selectionManager = new AceCollabExt.AceMultiSelectionManager(editor.getSession());
+
+  selectionReference = textModel.rangeReference(selectionKey);
+  setLocalSelection();
+  selectionReference.share();
+
+  session.selection.on('changeSelection', () => setLocalSelection());
+
+  const references = textModel.references({key: selectionKey});
+  references.forEach((reference) => {
+    if (!reference.isLocal()) {
+      addSelection(reference);
+    }
+  });
+
+  textModel.on("reference", (e) => {
+    if (e.reference.key() === selectionKey) {
+      addSelection(e.reference);
+    }
+  });
+}
+
+function setLocalSelection() {
+  if (!editor.selection.isEmpty()) {
+    const aceRanges = editor.selection.getAllRanges();
+    const indexRanges = aceRanges.map((aceRagne) => {
+      const start = doc.positionToIndex(aceRagne.start);
+      const end = doc.positionToIndex(aceRagne.end);
+      return {start: start, end: end};
+    });
+
+    selectionReference.set(indexRanges);
+  } else if (selectionReference.isSet()) {
+    selectionReference.clear();
+  }
+}
+
+function addSelection(reference) {
+  const color = colorAssigner.getColorAsHex(reference.sessionId());
+  const remoteSelection = reference.values().map(range => toAceRange(range));
+  selectionManager.addSelection(reference.sessionId(), reference.user().username, color, remoteSelection);
+
+  reference.on("cleared", () => selectionManager.clearSelection(reference.sessionId()));
+  reference.on("disposed", () => selectionManager.removeSelection(reference.sessionId()));
+  reference.on("set", () => {
+    selectionManager.setSelection(
+      reference.sessionId(), reference.values().map(range => toAceRange(range)));
+  });
+}
+
+function toAceRange(range) {
+  if (typeof range !== 'object') {
+    return null;
+  }
+
+  let start = range.start;
+  let end = range.end;
+
+  if (start > end) {
+    const temp = start;
+    start = end;
+    end = temp;
+  }
+
+  const rangeAnchor = doc.indexToPosition(start);
+  const rangeLead = doc.indexToPosition(end);
+  return new AceRange(rangeAnchor.row, rangeAnchor.column, rangeLead.row, rangeLead.column);
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Radar View Binding
+/////////////////////////////////////////////////////////////////////////////
+let radarView = null;
+let viewReference = null;
+const viewKey = "view";
+
+function initRadarView(textModel, radarViewElement) {
+  radarView = new AceCollabExt.AceRadarView(radarViewElement, editor);
+  viewReference = textModel.rangeReference(viewKey);
+
+  const references = textModel.references({key: viewKey});
+  references.forEach((reference) => {
+    if (!reference.isLocal()) {
+      addView(reference);
+    }
+  });
+
+  session.on('changeScrollTop', () => {
+    setTimeout(() => setLocalView(), 0);
+  });
+
+  textModel.on("reference", (e) => {
+    if (e.reference.key() === viewKey) {
+      addView(e.reference);
+    }
+  });
+
+  setTimeout(() => {
+    setLocalView();
+    viewReference.share();
+  }, 0);
+}
+
+function setLocalView() {
+  const viewportIndices = AceCollabExt.AceViewportUtil.getVisibleIndexRange(editor);
+  viewReference.set({start: viewportIndices.start, end: viewportIndices.end});
+}
+
+function addView(reference) {
+  const color = colorAssigner.getColorAsHex(reference.sessionId());
+
+  // fixme need the cursor
+  let cursorRow = null;
+  let viewRows = null;
+
+  if (reference.isSet()) {
+    const remoteViewIndices = reference.value();
+    viewRows = AceCollabExt.AceViewportUtil.indicesToRows(editor, remoteViewIndices.start, remoteViewIndices.end);
+  }
+
+  radarView.addView(reference.sessionId(), reference.user().username, color, viewRows, cursorRow);
+
+  // fixme need to implement this on the ace collab side
+  reference.on("cleared", () => radarView.clearView(reference.sessionId()));
+  reference.on("disposed", () => radarView.removeView(reference.sessionId()));
+  reference.on("set", () => {
+    const v = reference.value();
+    const rows = AceCollabExt.AceViewportUtil.indicesToRows(editor, v.start, v.end);
+    radarView.setViewRows(reference.sessionId(), rows);
+  });
+}
+
+
 </script>
 </body>
 </html>
