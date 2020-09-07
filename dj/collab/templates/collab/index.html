@@ -92,8 +92,10 @@ session.setMode('ace/mode/javascript');
 const AceRange = ace.require("ace/range").Range;
 const colorAssigner = new ConvergenceColorAssigner.ColorAssigner();
 
+const access_token = "{{ access_token }}";
 
-Convergence.connectAnonymously(DOMAIN_URL, username)
+Convergence.connectWithJwt(DOMAIN_URL, access_token)
+//Convergence.connectAnonymously(DOMAIN_URL, username)
   .then(d => {
     domain = d;
     // Now open the model, creating it using the initial data if it does not exist.

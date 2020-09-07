@@ -119,3 +119,30 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/2.2/howto/static-files/
 
 STATIC_URL = '/static/'
+
+
+def gen_key_or_open(filename):
+
+    if os.path.isfile(filename):
+        with open(filename, 'rb') as f:
+            with open(filename + ".pub", 'rb') as fpub:
+                return f.read(), fpub.read()
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                                                encryption_algorithm=serialization.NoEncryption())
+    public_key = private_key.public_key()
+    public_key_pem = public_key.public_bytes(encoding=serialization.Encoding.PEM,
+                                              format=serialization.PublicFormat.SubjectPublicKeyInfo)
+    with open(filename, 'wb') as f:
+        f.write(private_key_pem)
+    with open(filename + ".pub", 'wb') as f:
+        f.write(public_key_pem)
+    return private_key_pem, public_key_pem
+
+
+JWT_SIGNING_KEY_FILE = 'jwt-key'
+JWT_RS256_SIGNING_KEY = gen_key_or_open(JWT_SIGNING_KEY_FILE)[0]
