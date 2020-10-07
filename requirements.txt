@@ -1,5 +1,5 @@
 
 django==2.2
-jwt
+PyJWT
 cryptography
 ipython
