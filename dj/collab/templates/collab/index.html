@@ -30,7 +30,7 @@
 
 <script>
 
-var DOMAIN_URL = "http://localhost:8001/api/realtime/convergence/default";
+var DOMAIN_URL = location.origin.replace(/\:\d+/, ':8001') + "/api/realtime/convergence/default";
 
 
 // var editor = ace.edit("editor");
